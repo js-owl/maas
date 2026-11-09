@@ -1,6 +1,6 @@
 export const navigation = [
   { href: "/platform", label: "Платформа" },
-  { href: "/#process", label: "Конфигурации" },
+  { href: "/configurations", label: "Конфигурации" },
   { href: "/#contact", label: "О компании" },
 ] as const;
 
