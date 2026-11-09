@@ -45,3 +45,107 @@ docker compose -f docker-compose.local.yml up --build
 - `src/features/contact-form` — форма, server action, схема
 - `src/content/home.ts` — тексты и данные карточек
 - `src/components` — шапка и UI-примитивы
+
+## Архитектура
+
+### Приложение
+
+БД нет: тексты лежат в `src/content/home.ts`, статика в `public/`. Единственная серверная логика — server action формы заявки.
+
+```mermaid
+flowchart TB
+    subgraph app["src/app — маршруты"]
+        layout["layout.tsx<br/>корневой layout, метаданные, preload шрифтов"]
+        page["page.tsx<br/>главная страница"]
+        health["health/route.ts<br/>GET /health"]
+        nf["not-found.tsx"]
+        icon["icon.tsx"]
+        css["globals.css<br/>Tailwind v4, токены, @font-face"]
+    end
+
+    subgraph sections["src/sections/home — секции главной"]
+        hero["Hero"]
+        ind["Industries"]
+        proc["Process"]
+        cap["Capabilities"]
+        slider["CapabilitiesSlider<br/>client component"]
+        contact["Contact"]
+    end
+
+    subgraph feature["src/features/contact-form"]
+        form["ContactForm<br/>client, useActionState"]
+        action["actions.ts<br/>server action submitContact"]
+        schema["schema.ts<br/>zod-схема и типы состояния"]
+        test["schema.test.ts<br/>vitest"]
+    end
+
+    subgraph shared["Общее"]
+        header["components/layout<br/>SiteHeader, MobileNav"]
+        ui["components/ui<br/>Button, Field, Container, SectionHeading"]
+        content["content/home.ts<br/>тексты и данные карточек"]
+        env["lib/env.ts<br/>contactWebhookUrl()"]
+        cn["lib/cn.ts<br/>clsx + tailwind-merge"]
+    end
+
+    pub[("public/<br/>шрифты Montserrat, изображения")]
+    webhook(["Внешний вебхук<br/>CONTACT_WEBHOOK_URL"])
+
+    layout --> page
+    layout --> css
+    page --> hero & ind & proc & cap & contact
+
+    hero --> header
+    hero --> ui
+    ind --> content
+    ind --> ui
+    proc --> content
+    proc --> ui
+    cap --> content
+    cap --> slider
+    contact --> content
+    contact --> form
+
+    form --> ui
+    form -->|"form action"| action
+    action --> schema
+    form --> schema
+    test -.-> schema
+    action --> env
+    action -->|"POST JSON, таймаут 8 с"| webhook
+
+    ui --> cn
+    hero -.-> pub
+    layout -.-> pub
+```
+
+Если `CONTACT_WEBHOOK_URL` не задан, `submitContact` только пишет в лог, что заявка получена.
+
+### Рантайм и деплой
+
+```mermaid
+flowchart LR
+    user(["Браузер"]) -->|HTTPS| traefik["Traefik<br/>сеть traefik-global-proxy<br/>TLS, заголовки безопасности, healthcheck"]
+
+    subgraph container["Docker-контейнер fort (порт 80)"]
+        direction LR
+        entry["docker-entrypoint.sh<br/>1. запускает Next.js<br/>2. ждёт /health<br/>3. запускает nginx"]
+        nginx["nginx :80<br/>gzip, кэш /_next/static и /_next/image"]
+        next["Next.js standalone<br/>Node 20, 127.0.0.1:3000"]
+        entry -.-> next
+        entry -.-> nginx
+        nginx -->|proxy_pass| next
+    end
+
+    traefik --> nginx
+    next -->|"server action: POST заявки"| hook(["CONTACT_WEBHOOK_URL"])
+
+    subgraph build["Сборка образа (Dockerfile.prod)"]
+        b1["builder: npm ci + next build<br/>output: standalone"] --> b2["runner: node-slim + nginx + curl"]
+    end
+
+    reg[("Nexus registry<br/>maas-hosted/fort:latest")]
+    b2 --> reg
+    reg -->|"docker-compose.yml"| container
+
+    local["Локально:<br/>npm run dev :3000<br/>или docker-compose.local.yml :8082"]
+```
